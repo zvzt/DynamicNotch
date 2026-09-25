@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible DynamicNotch problem
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a DynamicNotch issue. For security problems, use the private contact information in SECURITY.md instead.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 26
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Music provider
+      options:
+        - Apple Music
+        - Spotify
+        - Both
+        - Not related to playback
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Explain the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
