@@ -18,7 +18,6 @@ DynamicNotch places a compact Now Playing interface at the top of your display. 
 - Browser master-output volume control
 - Configurable glass opacity and accent colors
 - Launch at Login option
-- Custom DynamicNotch app and menu-bar icon
 - Floating interface across Spaces
 
 ## Recommended installation
@@ -92,15 +91,6 @@ The main application remains:
 /Applications/DynamicNotch.app
 ```
 
-## App icon
-
-DynamicNotch uses the project icon supplied by ZXT for both:
-- the macOS application icon
-- the menu-bar settings icon
-
-Source image:
-
-`https://i.postimg.cc/jjjWppSR/image.png`
 
 ## Uninstall
 
