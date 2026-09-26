@@ -83,7 +83,7 @@ On first launch, DynamicNotch creates its own support directory:
 ~/Library/Application Support/DynamicNotch
 ```
 
-Bundled support files such as the app icon and media helper are copied there so DynamicNotch keeps its own runtime files together instead of scattering them around your home directory.
+Bundled runtime support files are copied there so DynamicNotch keeps its own files together instead of scattering them around your home directory.
 
 The main application remains:
 
