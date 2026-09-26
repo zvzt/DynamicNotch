@@ -16,9 +16,9 @@ jobs:
       - name: Validate Info.plist
         run: plutil -lint Info.plist
       - name: Type-check Swift source
-        run: swiftc -typecheck -framework Cocoa -framework SwiftUI DynamicNotch.swift
+        run: swiftc -typecheck -framework Cocoa -framework SwiftUI -framework ServiceManagement DynamicNotch.swift
       - name: Compile DynamicNotch
         run: |
-          swiftc -O -framework Cocoa -framework SwiftUI             -o "$RUNNER_TEMP/DynamicNotch"             DynamicNotch.swift
+          swiftc -O -framework Cocoa -framework SwiftUI -framework ServiceManagement -o "$RUNNER_TEMP/DynamicNotch" DynamicNotch.swift
           test -x "$RUNNER_TEMP/DynamicNotch"
           file "$RUNNER_TEMP/DynamicNotch"
