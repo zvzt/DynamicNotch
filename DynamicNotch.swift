@@ -6,6 +6,7 @@
 
 import Cocoa
 import SwiftUI
+import ServiceManagement
 
 struct ShortcutItem: Identifiable, Codable {
     var id = UUID()
@@ -44,31 +45,80 @@ struct SpotifyBrandLogo: View {
     }
 }
 
+final class MediaControlEngine {
+    static let shared = MediaControlEngine()
+    let toolPath: String
+    private let queue = DispatchQueue(label: "lol.zxt.dynamicnotch.media", qos: .userInitiated)
+
+    init() {
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("media-control/bin/media-control").path
+        let candidates = [bundled, "/opt/homebrew/bin/media-control", "/usr/local/bin/media-control"].compactMap { $0 }
+        toolPath = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/opt/homebrew/bin/media-control"
+    }
+
+    func get(includeArtwork: Bool, completion: @escaping ([String: Any]?) -> Void) {
+        queue.async {
+            let p = Process()
+            let out = Pipe()
+            p.executableURL = URL(fileURLWithPath: self.toolPath)
+            p.arguments = includeArtwork ? ["get", "--now"] : ["get", "--now", "--no-artwork"]
+            p.standardOutput = out
+            p.standardError = Pipe()
+            do {
+                try p.run()
+                p.waitUntilExit()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                guard p.terminationStatus == 0,
+                      let obj = try? JSONSerialization.jsonObject(with: data),
+                      let dict = obj as? [String: Any] else {
+                    DispatchQueue.main.async { completion(nil) }
+                    return
+                }
+                DispatchQueue.main.async { completion(dict) }
+            } catch {
+                DispatchQueue.main.async { completion(nil) }
+            }
+        }
+    }
+
+    func command(_ args: [String]) {
+        queue.async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: self.toolPath)
+            p.arguments = args
+            p.standardOutput = Pipe()
+            p.standardError = Pipe()
+            try? p.run()
+            p.waitUntilExit()
+        }
+    }
+}
+
 final class IslandState: ObservableObject {
     @Published var isExpanded: Bool = false
-    @Published var selectedProvider: String = UserDefaults.standard.string(forKey: "dyn_provider") ?? "Music"
-    
-    @Published var trackTitle: String = "Not Playing"
-    @Published var trackArtist: String = "Apple Music"
+    @Published var selectedProvider: String = UserDefaults.standard.string(forKey: "dyn_provider") ?? "System"
+    @Published var trackTitle: String = "No Audio"
+    @Published var trackArtist: String = "System Idle"
+    @Published var appSource: String = "System"
+    @Published var sourceBundle: String = ""
     @Published var isPlaying: Bool = false
     @Published var trackPos: Double = 0.0
     @Published var trackDur: Double = 1.0
-    @Published var appVolume: Double = 75.0
+    @Published var appVolume: Double = 50.0
+    @Published var volumeAvailable: Bool = false
     @Published var artwork: NSImage? = nil
-    
     @Published var compactW: CGFloat = 224
     @Published var compactH: CGFloat = 32
     @Published var expandedW: CGFloat = 430
     @Published var expandedH: CGFloat = 145
-    
+    @Published var launchAtLogin: Bool = false
     @Published var bgOpacity: Double = UserDefaults.standard.object(forKey: "dyn_bg_opacity") != nil ? UserDefaults.standard.double(forKey: "dyn_bg_opacity") : 1.0 {
         didSet { UserDefaults.standard.set(bgOpacity, forKey: "dyn_bg_opacity") }
     }
-    
     @Published var accentName: String = UserDefaults.standard.string(forKey: "dyn_accent") ?? "White" {
         didSet { UserDefaults.standard.set(accentName, forKey: "dyn_accent") }
     }
-    
+
     var accentColor: Color {
         switch accentName {
         case "Orange": return Color(red: 1.0, green: 0.58, blue: 0.0)
@@ -79,287 +129,595 @@ final class IslandState: ObservableObject {
         default: return Color.white
         }
     }
-    
-    var syncToken: Int = 0
-    var activeArtTask: URLSessionDataTask?
-    var pendingDebounceWork: DispatchWorkItem?
-    let mediaQueue = DispatchQueue(label: "com.notch.mediaQueue", qos: .userInitiated)
-    
-    var lastArtKey: String = ""
+
     var isSeeking: Bool = false
     var isChangingVol: Bool = false
-    var isChangingOpacity: Bool = false
     var lastSyncDate: Date = Date()
-    var artCache: [String: NSImage] = [:]
+    var lastIdentifier: String = ""
     var panel: NSPanel?
-    
+    private var isQuerying = false
+    private var missCount = 0
+    private var artworkIsReal = false
+    private var lastArtworkAttempt = Date.distantPast
+    private var volumeWorkItem: DispatchWorkItem?
+    private var currentAlbum = ""
+    private var remoteArtworkURL = ""
+
     init() {
-        startNotificationObservers()
-        startClockTicker()
-        syncPlayer()
+        checkLoginStatus()
+        setupListeners()
     }
-    
-    func startNotificationObservers() {
-        let dnc = DistributedNotificationCenter.default()
-        dnc.addObserver(forName: NSNotification.Name("com.apple.Music.playerInfo"), object: nil, queue: .main) { [weak self] n in
-            guard let self = self, self.selectedProvider == "Music" else { return }
-            self.handleMusicNotif(n)
-        }
-        dnc.addObserver(forName: NSNotification.Name("com.spotify.client.PlaybackStateChanged"), object: nil, queue: .main) { [weak self] n in
-            guard let self = self, self.selectedProvider == "Spotify" else { return }
-            self.handleSpotifyNotif(n)
+
+    func checkLoginStatus() {
+        if #available(macOS 13.0, *) {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
         }
     }
-    
-    func handleMusicNotif(_ n: Notification) {
-        guard let info = n.userInfo else { return }
-        let st = info["Player State"] as? String ?? ""
-        isPlaying = (st == "Playing")
-        let title = info["Name"] as? String ?? trackTitle
-        let artist = info["Artist"] as? String ?? trackArtist
-        if let d = info["Total Time"] as? Double { trackDur = max(d / 1000.0, 1.0) }
-        updateMetadata(title: title, artist: artist, forceRescan: true)
-    }
-    
-    func handleSpotifyNotif(_ n: Notification) {
-        guard let info = n.userInfo else { return }
-        let st = info["Player State"] as? String ?? ""
-        isPlaying = (st == "Playing")
-        let title = info["Name"] as? String ?? trackTitle
-        let artist = info["Artist"] as? String ?? trackArtist
-        if let d = info["Duration"] as? Double { trackDur = max(d / 1000.0, 1.0) }
-        updateMetadata(title: title, artist: artist, forceRescan: true)
-    }
-    
-    func updateMetadata(title: String, artist: String, forceRescan: Bool = false) {
-        guard !title.isEmpty else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
-            trackTitle = title
-            trackArtist = artist
-        }
-        let key = title + "|" + artist
-        if key != lastArtKey || forceRescan {
-            lastArtKey = key
-            activeArtTask?.cancel()
-            pendingDebounceWork?.cancel()
-            
-            if let cached = artCache[key] {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    self.artwork = cached
+
+    func toggleLogin() {
+        if #available(macOS 13.0, *) {
+            do {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                    launchAtLogin = false
+                } else {
+                    try SMAppService.mainApp.register()
+                    launchAtLogin = true
                 }
-            } else {
-                rescanArtworkDirect(title: title, artist: artist)
-            }
+            } catch {}
         }
     }
-    
-    func rescanArtworkDirect(title: String, artist: String) {
-        let key = title + "|" + artist
-        syncToken += 1
-        let currentId = syncToken
-        
-        mediaQueue.async { [weak self] in
-            guard let self = self else { return }
-            let app = self.selectedProvider
-            let sc: String
-            if app == "Music" {
-                let uniqueFile = "/tmp/dyn_art_\(arc4random()).jpg"
-                sc = """
-                if application "Music" is running then
-                    tell application "Music"
-                        try
-                            if (count of artworks of current track) > 0 then
-                                set d to raw data of artwork 1 of current track
-                                set fp to open for access (POSIX file "\(uniqueFile)") with write permission
-                                set eof fp to 0
-                                write d to fp
-                                close access fp
-                                return "\(uniqueFile)"
-                            end if
-                        end try
-                    end tell
-                end if
-                return ""
-                """
-            } else {
-                sc = "if application \"Spotify\" is running then tell application \"Spotify\" to return artwork url of current track\nreturn \"\""
-            }
-            
-            var err: NSDictionary?
-            if let script = NSAppleScript(source: sc) {
-                let res = script.executeAndReturnError(&err).stringValue ?? ""
-                if !res.isEmpty {
-                    if res.hasPrefix("/tmp/"), let data = try? Data(contentsOf: URL(fileURLWithPath: res)), let img = NSImage(data: data) {
-                        try? FileManager.default.removeItem(atPath: res)
-                        DispatchQueue.main.async {
-                            guard currentId == self.syncToken else { return }
-                            self.artCache[key] = img
-                            withAnimation(.easeInOut(duration: 0.32)) { self.artwork = img }
-                        }
-                        return
-                    } else if res.hasPrefix("http"), let u = URL(string: res) {
-                        let task = URLSession.shared.dataTask(with: u) { [weak self] d, _, _ in
-                            if let d = d, let img = NSImage(data: d) {
-                                DispatchQueue.main.async {
-                                    guard let self = self, currentId == self.syncToken else { return }
-                                    self.artCache[key] = img
-                                    withAnimation(.easeInOut(duration: 0.32)) { self.artwork = img }
-                                }
-                            }
-                        }
-                        self.activeArtTask = task
-                        task.resume()
-                        return
-                    }
-                }
-            }
-            self.fetchFallbackArtwork(title: title, artist: artist, token: currentId, key: key)
-        }
-    }
-    
-    func fetchFallbackArtwork(title: String, artist: String, token: Int, key: String) {
-        let q = "\(title) \(artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let reqUrl = URL(string: "https://itunes.apple.com/search?term=\(q)&media=music&entity=song&limit=1") else { return }
-        
-        let task = URLSession.shared.dataTask(with: reqUrl) { [weak self] data, _, _ in
-            guard let self = self,
-                  let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let results = json["results"] as? [[String: Any]],
-                  let first = results.first,
-                  let rawUrl = first["artworkUrl100"] as? String else { return }
-            let hdUrl = rawUrl.replacingOccurrences(of: "100x100bb", with: "600x600bb")
-            if let u = URL(string: hdUrl) {
-                let imgTask = URLSession.shared.dataTask(with: u) { [weak self] imgData, _, _ in
-                    if let imgData = imgData, let img = NSImage(data: imgData) {
-                        DispatchQueue.main.async {
-                            guard let self = self, token == self.syncToken else { return }
-                            self.artCache[key] = img
-                            if self.lastArtKey == key {
-                                withAnimation(.easeInOut(duration: 0.32)) { self.artwork = img }
-                            }
-                        }
-                    }
-                }
-                self.activeArtTask = imgTask
-                imgTask.resume()
-            }
-        }
-        self.activeArtTask = task
-        task.resume()
-    }
-    
-    func startClockTicker() {
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+
+    func setupListeners() {
+        queryMedia()
+        Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in self?.queryMedia() }
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if self.isPlaying && !self.isSeeking {
-                let el = Date().timeIntervalSince(self.lastSyncDate)
-                self.trackPos = min(self.trackDur, self.trackPos + el)
+                let elapsed = Date().timeIntervalSince(self.lastSyncDate)
+                self.trackPos = min(self.trackDur, self.trackPos + elapsed)
                 self.lastSyncDate = Date()
             }
         }
-        Timer.scheduledTimer(withTimeInterval: 3.5, repeats: true) { [weak self] _ in
-            guard let self = self, self.isPlaying, !self.isSeeking else { return }
-            self.syncPlayer()
+        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self = self, !self.isChangingVol else { return }
+            self.readAppVolume()
         }
     }
-    
-    func syncPlayer() {
-        syncToken += 1
-        let currentId = syncToken
-        mediaQueue.async { [weak self] in
+
+    func queryAppleMusic(completion: @escaping ([String: Any]?) -> Void) {
+        let script = #"""
+        function run(){
+          const m=Application('Music');
+          if(!m.running()) return '';
+          const safe=(f,d)=>{try{const v=f();return v===undefined||v===null?d:v}catch(e){return d}};
+          const state=String(safe(()=>m.playerState(),'stopped'));
+          if(state==='stopped') return '';
+          const t=m.currentTrack;
+          const title=String(safe(()=>t.name(),''));
+          const artist=String(safe(()=>t.artist(),''));
+          const album=String(safe(()=>t.album(),''));
+          if(!title) return '';
+          const o={
+            title:title,
+            artist:artist,
+            album:album,
+            duration:Number(safe(()=>t.duration(),1)),
+            elapsedTimeNow:Number(safe(()=>m.playerPosition(),0)),
+            playing:state==='playing',
+            bundleIdentifier:'com.apple.Music',
+            parentApplicationBundleIdentifier:'com.apple.Music',
+            uniqueIdentifier:title+'|'+artist+'|'+album,
+            volume:Number(safe(()=>m.soundVolume(),50))
+          };
+          return JSON.stringify(o);
+        }
+        """#
+        runJXA(script) { out in
+            guard !out.isEmpty, let data=out.data(using:.utf8), let obj=try? JSONSerialization.jsonObject(with:data), let dict=obj as? [String:Any], let title=dict["title"] as? String, !title.isEmpty else { completion(nil); return }
+            completion(dict)
+        }
+    }
+
+    func readFirefoxMedia() -> [String: Any]? {
+        let path="/tmp/dynamicnotch_firefox_state.json"
+        guard let attrs=try? FileManager.default.attributesOfItem(atPath:path),
+              let modified=attrs[.modificationDate] as? Date,
+              Date().timeIntervalSince(modified) < 2.0,
+              let data=try? Data(contentsOf:URL(fileURLWithPath:path)),
+              let raw=try? JSONSerialization.jsonObject(with:data),
+              let obj=raw as? [String:Any],
+              (obj["playing"] as? Bool) == true,
+              let title=obj["title"] as? String, !title.isEmpty else { return nil }
+        let artist=(obj["artist"] as? String) ?? "Firefox"
+        let url=(obj["url"] as? String) ?? ""
+        var d:[String:Any]=[
+            "title":title,
+            "artist":artist,
+            "duration":number(obj["duration"]) ?? 1.0,
+            "elapsedTimeNow":number(obj["currentTime"]) ?? 0.0,
+            "playing":true,
+            "bundleIdentifier":"org.mozilla.firefox",
+            "parentApplicationBundleIdentifier":"org.mozilla.firefox",
+            "uniqueIdentifier":"firefox|"+url+"|"+title
+        ]
+        if let art=obj["artworkURL"] as? String,!art.isEmpty{d["artworkURL"]=art}
+        return d
+    }
+
+    func queryMedia() {
+        guard !isQuerying else { return }
+        isQuerying = true
+        if let firefox=readFirefoxMedia() {
+            isQuerying=false
+            missCount=0
+            applyMedia(firefox)
+            return
+        }
+        MediaControlEngine.shared.get(includeArtwork: false) { [weak self] dict in
             guard let self = self else { return }
-            let app = self.selectedProvider
-            let sc: String
-            if app == "Spotify" {
-                sc = """
-                if application "Spotify" is running then
-                    tell application "Spotify"
-                        return (player state as string) & "|" & (name of current track) & "|" & (artist of current track) & "|" & (player position) & "|" & ((duration of current track) / 1000) & "|" & (sound volume)
-                    end tell
-                end if
-                return "stopped|||0|1|0"
-                """
-            } else {
-                sc = """
-                if application "Music" is running then
-                    tell application "Music"
-                        return (player state as string) & "|" & (name of current track) & "|" & (artist of current track) & "|" & (player position) & "|" & (duration of current track) & "|" & (sound volume)
-                    end tell
-                end if
-                return "stopped|||0|1|0"
-                """
+            let finish: ([String:Any]?) -> Void = { finalDict in
+                self.isQuerying = false
+                if let firefox=self.readFirefoxMedia() {
+                    self.missCount=0
+                    self.applyMedia(firefox)
+                    return
+                }
+                guard let finalDict=finalDict, !(finalDict["title"] is NSNull) else {
+                    self.missCount += 1
+                    if self.missCount >= 2 { self.clearMedia() }
+                    return
+                }
+                self.missCount = 0
+                self.applyMedia(finalDict)
             }
-            var err: NSDictionary?
-            if let script = NSAppleScript(source: sc) {
-                let out = script.executeAndReturnError(&err).stringValue ?? ""
-                let p = out.components(separatedBy: "|")
-                if p.count >= 6 {
-                    let playing = (p[0] == "playing" || p[0] == "kPSP")
-                    let title = p[1].isEmpty ? "Not Playing" : p[1]
-                    let artist = p[2].isEmpty ? (self.selectedProvider == "Music" ? "Apple Music" : "Spotify") : p[2]
-                    let pos = Double(p[3]) ?? 0.0
-                    let dur = max(Double(p[4]) ?? 1.0, 1.0)
-                    let vol = Double(p[5]) ?? self.appVolume
-                    
-                    DispatchQueue.main.async {
-                        guard currentId == self.syncToken else { return }
-                        self.isPlaying = playing
-                        self.trackDur = dur
-                        if !self.isSeeking {
-                            self.trackPos = pos
-                            self.lastSyncDate = Date()
-                        }
-                        if !self.isChangingVol { self.appVolume = vol }
-                        self.updateMetadata(title: title, artist: artist, forceRescan: false)
+            if let dict=dict {
+                let bundle=((dict["parentApplicationBundleIdentifier"] as? String)?.isEmpty==false ? dict["parentApplicationBundleIdentifier"] as? String : nil) ?? (dict["bundleIdentifier"] as? String) ?? ""
+                if self.isAppleMusicSource(bundle) {
+                    self.queryAppleMusic { music in
+                        if let firefox=self.readFirefoxMedia(){finish(firefox)}
+                        else{finish(music ?? dict)}
                     }
+                } else { finish(dict) }
+            } else {
+                self.queryAppleMusic { music in finish(music) }
+            }
+        }
+    }
+
+    func applyMedia(_ dict: [String: Any]) {
+        let title = (dict["title"] as? String) ?? ""
+        guard !title.isEmpty else { return }
+        let artist = (dict["artist"] as? String) ?? ""
+        let album = (dict["album"] as? String) ?? ""
+        let bundle = ((dict["parentApplicationBundleIdentifier"] as? String)?.isEmpty == false ? (dict["parentApplicationBundleIdentifier"] as? String) : nil) ?? (dict["bundleIdentifier"] as? String) ?? ""
+        let playing = (dict["playing"] as? Bool) ?? false
+        let duration = number(dict["duration"]) ?? 1.0
+        let elapsed = number(dict["elapsedTimeNow"]) ?? number(dict["elapsedTime"]) ?? 0.0
+        let identifier = ((dict["uniqueIdentifier"] as? String) ?? "") + "|" + title + "|" + artist + "|" + bundle
+        let changed = identifier != lastIdentifier
+
+        isPlaying = playing
+        trackTitle = title
+        trackArtist = artist.isEmpty ? (album.isEmpty ? displayName(for: bundle) : album) : artist
+        currentAlbum = album
+        remoteArtworkURL = (dict["artworkURL"] as? String) ?? ""
+        trackDur = max(duration, 1.0)
+        if !isSeeking {
+            trackPos = max(0, min(elapsed, trackDur))
+            lastSyncDate = Date()
+        }
+        if bundle != sourceBundle {
+            sourceBundle = bundle
+            appSource = displayName(for: bundle)
+            artworkIsReal = false
+            if let v=number(dict["volume"]), !isBrowserSource(bundle) {
+                appVolume=max(0,min(v,100))
+                volumeAvailable = isAppleMusicSource(bundle) || bundle.lowercased().contains("spotify")
+            } else { readAppVolume() }
+            if isMusicSource(bundle) || bundle.lowercased().contains("firefox") {
+                withAnimation(.easeInOut(duration: 0.12)) { artwork = nil }
+            } else { setFallbackArtwork(bundle: bundle) }
+        }
+        if changed {
+            lastIdentifier = identifier
+            artworkIsReal = false
+            if isMusicSource(bundle) || bundle.lowercased().contains("firefox") {
+                withAnimation(.easeInOut(duration: 0.12)) { artwork = nil }
+            } else { setFallbackArtwork(bundle: bundle) }
+            fetchArtwork(attempt: 0)
+        } else if !artworkIsReal && Date().timeIntervalSince(lastArtworkAttempt) > 1.5 {
+            fetchArtwork(attempt: 0)
+        }
+    }
+
+    func fetchArtwork(attempt: Int = 0) {
+        lastArtworkAttempt = Date()
+        let b=sourceBundle.lowercased()
+        if b.contains("firefox"), !remoteArtworkURL.isEmpty {
+            fetchRemoteArtwork(remoteArtworkURL, expected:lastIdentifier) {
+                if self.artwork == nil { self.setFallbackArtwork(bundle:self.sourceBundle) }
+            }
+            return
+        }
+        if isAppleMusicSource(sourceBundle) {
+            fetchAppleMusicArtwork(attempt:attempt)
+            return
+        }
+        let expected = lastIdentifier
+        MediaControlEngine.shared.get(includeArtwork: true) { [weak self] dict in
+            guard let self = self, self.lastIdentifier == expected else { return }
+            if let dict = dict,
+               let b64 = dict["artworkData"] as? String,
+               let data = Data(base64Encoded: b64),
+               let img = NSImage(data: data) {
+                self.artworkIsReal = true
+                withAnimation(.easeInOut(duration: 0.22)) { self.artwork = img }
+                return
+            }
+            if attempt < 5 {
+                let delay = 0.35 + (Double(attempt) * 0.45)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    if self.lastIdentifier == expected && !self.artworkIsReal { self.fetchArtwork(attempt: attempt + 1) }
+                }
+            } else if self.artwork == nil {
+                self.setFallbackArtwork(bundle: self.sourceBundle)
+            }
+        }
+    }
+
+    func isAppleMusicSource(_ bundle: String) -> Bool {
+        let b=bundle.lowercased()
+        return b == "com.apple.music" || b.contains("apple.music")
+    }
+
+    func isMusicSource(_ bundle: String) -> Bool {
+        let b = bundle.lowercased()
+        return b.contains("spotify") || isAppleMusicSource(bundle)
+    }
+
+    func fetchRemoteArtwork(_ urlString:String, expected:String, fallback:@escaping ()->Void) {
+        guard let url=URL(string:urlString) else { fallback(); return }
+        URLSession.shared.dataTask(with:url){ [weak self] data,_,_ in
+            guard let self=self else{return}
+            DispatchQueue.main.async {
+                guard self.lastIdentifier==expected else{return}
+                if let data=data,let img=NSImage(data:data){
+                    self.artworkIsReal=true
+                    withAnimation(.easeInOut(duration:0.22)){self.artwork=img}
+                }else{fallback()}
+            }
+        }.resume()
+    }
+
+    func fetchAppleMusicArtwork(attempt:Int=0) {
+        let expected=lastIdentifier
+        let artPath="/tmp/dynamicnotch_music_artwork"
+        let script=#"""
+        set outPath to POSIX file "/tmp/dynamicnotch_music_artwork"
+        set outFile to missing value
+        try
+            tell application id "com.apple.Music"
+                if not running then return ""
+                set srcBytes to raw data of artwork 1 of current track
+            end tell
+            set outFile to open for access outPath with write permission
+            set eof outFile to 0
+            write srcBytes to outFile
+            close access outFile
+            return "/tmp/dynamicnotch_music_artwork"
+        on error
+            try
+                if outFile is not missing value then close access outFile
+            end try
+            return ""
+        end try
+        """#
+        runAppleScript(script){ [weak self] out in
+            guard let self=self,self.lastIdentifier==expected else{return}
+            if !out.isEmpty,
+               let data=try? Data(contentsOf:URL(fileURLWithPath:artPath)),
+               let img=NSImage(data:data) {
+                self.artworkIsReal=true
+                withAnimation(.easeInOut(duration:0.22)){self.artwork=img}
+                return
+            }
+            self.fetchAppleMusicSystemArtwork(expected:expected,attempt:attempt)
+        }
+    }
+
+    func fetchAppleMusicSystemArtwork(expected:String,attempt:Int=0) {
+        let expectedTitle=trackTitle
+        MediaControlEngine.shared.get(includeArtwork:true){ [weak self] dict in
+            guard let self=self,self.lastIdentifier==expected else{return}
+            if let dict=dict {
+                let bundle=((dict["parentApplicationBundleIdentifier"] as? String)?.isEmpty==false ? dict["parentApplicationBundleIdentifier"] as? String : nil) ?? (dict["bundleIdentifier"] as? String) ?? ""
+                let title=(dict["title"] as? String) ?? ""
+                if self.isAppleMusicSource(bundle),
+                   title.caseInsensitiveCompare(expectedTitle) == .orderedSame,
+                   let b64=dict["artworkData"] as? String,
+                   let data=Data(base64Encoded:b64),
+                   let img=NSImage(data:data) {
+                    self.artworkIsReal=true
+                    withAnimation(.easeInOut(duration:0.22)){self.artwork=img}
+                    return
                 }
             }
+            self.fetchAppleCatalogArtwork(expected:expected)
         }
     }
-    
-    func mediaCmd(_ cmd: String) {
-        syncToken += 1
-        activeArtTask?.cancel()
-        pendingDebounceWork?.cancel()
-        lastSyncDate = Date()
-        mediaQueue.async { [weak self] in
-            guard let self = self else { return }
-            let app = self.selectedProvider
-            let sc = "if application \"\(app)\" is running then tell application \"\(app)\" to \(cmd)"
-            var err: NSDictionary?
-            NSAppleScript(source: sc)?.executeAndReturnError(&err)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.syncPlayer()
+
+    func fetchAppleCatalogArtwork(expected:String) {
+        let title=trackTitle,artist=trackArtist,album=currentAlbum
+        var c=URLComponents(string:"https://itunes.apple.com/search")!
+        c.queryItems=[
+            URLQueryItem(name:"term",value:[artist,title,album].filter{!$0.isEmpty}.joined(separator:" ")),
+            URLQueryItem(name:"entity",value:"song"),
+            URLQueryItem(name:"limit",value:"10")
+        ]
+        guard let url=c.url else { if artwork == nil { setFallbackArtwork(bundle:sourceBundle) }; return }
+        URLSession.shared.dataTask(with:url){ [weak self] data,_,_ in
+            guard let self=self else{return}
+            var artURL:String?
+            if let data=data,
+               let obj=try? JSONSerialization.jsonObject(with:data),
+               let raw=obj as? [String:Any],
+               let results=raw["results"] as? [[String:Any]] {
+                let exact=results.first{
+                    (($0["trackName"] as? String) ?? "").caseInsensitiveCompare(title) == .orderedSame &&
+                    (($0["artistName"] as? String) ?? "").caseInsensitiveCompare(artist) == .orderedSame
+                }
+                let choice=exact ?? results.first
+                artURL=choice?["artworkUrl100"] as? String
+            }
+            guard let rawURL=artURL else{
+                DispatchQueue.main.async{if self.lastIdentifier==expected && self.artwork == nil{self.setFallbackArtwork(bundle:self.sourceBundle)}}
+                return
+            }
+            let hi=rawURL.replacingOccurrences(of:"100x100bb",with:"600x600bb").replacingOccurrences(of:"100x100",with:"600x600")
+            guard let u=URL(string:hi) else{return}
+            URLSession.shared.dataTask(with:u){ data,_,_ in
+                DispatchQueue.main.async{
+                    guard self.lastIdentifier==expected else{return}
+                    if let data=data,let img=NSImage(data:data){
+                        self.artworkIsReal=true
+                        withAnimation(.easeInOut(duration:0.22)){self.artwork=img}
+                    }else if self.artwork == nil{self.setFallbackArtwork(bundle:self.sourceBundle)}
+                }
+            }.resume()
+        }.resume()
+    }
+
+    func setFallbackArtwork(bundle: String) {
+        guard !bundle.isEmpty else {
+            withAnimation(.easeInOut(duration: 0.18)) { artwork = nil }
+            return
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) {
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            withAnimation(.easeInOut(duration: 0.18)) { artwork = icon }
+        } else {
+            withAnimation(.easeInOut(duration: 0.18)) { artwork = nil }
+        }
+    }
+
+    func displayName(for bundle: String) -> String {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        let b = bundle.lowercased()
+        if b.contains("firefox") { return "Firefox" }
+        if b.contains("chrome") { return "Chrome" }
+        if b.contains("safari") { return "Safari" }
+        if b.contains("spotify") { return "Spotify" }
+        if b.contains("music") { return "Music" }
+        return bundle.isEmpty ? "System" : bundle
+    }
+
+    func number(_ value: Any?) -> Double? {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        return nil
+    }
+
+    func clearMedia() {
+        isPlaying = false
+        trackTitle = "No Audio"
+        trackArtist = "System Idle"
+        appSource = "System"
+        sourceBundle = ""
+        trackPos = 0
+        trackDur = 1
+        lastIdentifier = ""
+        currentAlbum = ""
+        remoteArtworkURL = ""
+        artworkIsReal = false
+        volumeAvailable = false
+        withAnimation(.easeInOut(duration: 0.18)) { artwork = nil }
+    }
+
+    func sendFirefoxCommand(_ action:String, value:Any?=nil) {
+        var payload:[String:Any]=["id":String(Int(Date().timeIntervalSince1970*1000)),"action":action]
+        if let value=value{payload["value"]=value}
+        if let d=try? JSONSerialization.data(withJSONObject:payload){try? d.write(to:URL(fileURLWithPath:"/tmp/dynamicnotch_firefox_cmd.json"),options:.atomic)}
+    }
+
+    func isBrowserSource(_ bundle: String) -> Bool {
+        let b = bundle.lowercased()
+        return b.contains("firefox") || b.contains("chrome") || b.contains("safari")
+    }
+
+    func mediaPlayPause() {
+        let b=sourceBundle.lowercased()
+        if isAppleMusicSource(sourceBundle) {
+            runAppleScript("tell application id \"com.apple.Music\" to playpause") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.12){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("spotify") {
+            runAppleScript("tell application id \"com.spotify.client\" to playpause") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.12){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("firefox") { sendFirefoxCommand("playPause") }
+        MediaControlEngine.shared.command(["toggle-play-pause"])
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.15){self.queryMedia()}
+    }
+
+    func mediaNext() {
+        let b=sourceBundle.lowercased()
+        if isAppleMusicSource(sourceBundle) {
+            runAppleScript("tell application id \"com.apple.Music\" to next track") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("spotify") {
+            runAppleScript("tell application id \"com.spotify.client\" to next track") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("firefox") { sendFirefoxCommand("seek",value:min(trackDur,trackPos+15.0)) }
+        MediaControlEngine.shared.command(["skip-fifteen-seconds"])
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+    }
+
+    func mediaPrev() {
+        let b=sourceBundle.lowercased()
+        if isAppleMusicSource(sourceBundle) {
+            runAppleScript("tell application id \"com.apple.Music\" to previous track") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("spotify") {
+            runAppleScript("tell application id \"com.spotify.client\" to previous track") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("firefox") { sendFirefoxCommand("seek",value:max(0,trackPos-15.0)) }
+        MediaControlEngine.shared.command(["go-back-fifteen-seconds"])
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+    }
+
+    func seek(to seconds: Double) {
+        let s=max(0,min(seconds,trackDur))
+        trackPos=s
+        lastSyncDate=Date()
+        let b=sourceBundle.lowercased()
+        if isAppleMusicSource(sourceBundle) {
+            runAppleScript("tell application id \"com.apple.Music\" to set player position to \(s)") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("spotify") {
+            runAppleScript("tell application id \"com.spotify.client\" to set player position to \(s)") { _ in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.queryMedia()}
+            }
+            return
+        }
+        if b.contains("firefox") { sendFirefoxCommand("seek",value:s) }
+        MediaControlEngine.shared.command(["seek",String(format:"%.3f",s)])
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.25){self.queryMedia()}
+    }
+
+    func runAppleScript(_ source: String, completion: ((String) -> Void)? = nil) {
+        DispatchQueue.global(qos: .utility).async {
+            let p = Process()
+            let out = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", source]
+            p.standardOutput = out
+            p.standardError = Pipe()
+            do {
+                try p.run(); p.waitUntilExit()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                DispatchQueue.main.async { completion?(str) }
+            } catch {
+                DispatchQueue.main.async { completion?("") }
             }
         }
     }
-    
-    func seek(to s: Double) {
-        let app = self.selectedProvider
-        mediaQueue.async {
-            let sc = "if application \"\(app)\" is running then tell application \"\(app)\" to set player position to \(s)"
-            var err: NSDictionary?
-            NSAppleScript(source: sc)?.executeAndReturnError(&err)
+
+    func runJXA(_ source: String, completion: ((String) -> Void)? = nil) {
+        DispatchQueue.global(qos:.utility).async {
+            let p=Process(), out=Pipe()
+            p.executableURL=URL(fileURLWithPath:"/usr/bin/osascript")
+            p.arguments=["-l","JavaScript","-e",source]
+            p.standardOutput=out
+            p.standardError=Pipe()
+            do {
+                try p.run(); p.waitUntilExit()
+                let data=out.fileHandleForReading.readDataToEndOfFile()
+                let str=String(data:data,encoding:.utf8)?.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
+                DispatchQueue.main.async{ completion?(str) }
+            } catch { DispatchQueue.main.async{ completion?("") } }
         }
     }
-    
-    func setVolume(to v: Double) {
-        let app = self.selectedProvider
-        mediaQueue.async {
-            let sc = "if application \"\(app)\" is running then tell application \"\(app)\" to set sound volume to \(Int(v))"
-            var err: NSDictionary?
-            NSAppleScript(source: sc)?.executeAndReturnError(&err)
+
+    func readAppVolume() {
+        let b=sourceBundle.lowercased()
+        if isAppleMusicSource(sourceBundle) {
+            runJXA("const m=Application('Music');m.running()?String(m.soundVolume()):''") { out in
+                if let v=Double(out){ self.volumeAvailable=true; if !self.isChangingVol { self.appVolume=v } } else { self.volumeAvailable=false }
+            }
+            return
         }
+        if b.contains("spotify") {
+            runAppleScript("tell application id \"com.spotify.client\" to get sound volume") { out in
+                if let v=Double(out){ self.volumeAvailable=true; if !self.isChangingVol { self.appVolume=v } } else { self.volumeAvailable=false }
+            }
+            return
+        }
+        if isBrowserSource(sourceBundle) {
+            runAppleScript("output volume of (get volume settings)") { out in
+                if let v=Double(out){ self.volumeAvailable=true; if !self.isChangingVol { self.appVolume=v } } else { self.volumeAvailable=false }
+            }
+            return
+        }
+        volumeAvailable=false
     }
+
+    func adjustVolume(to v: Double) {
+        appVolume=max(0,min(v,100))
+        let value=Int(appVolume.rounded()), b=sourceBundle.lowercased()
+        volumeWorkItem?.cancel()
+        let work=DispatchWorkItem {
+            if self.isBrowserSource(self.sourceBundle) {
+                let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/osascript");p.arguments=["-e","set volume output volume \(value)"];p.standardOutput=Pipe();p.standardError=Pipe();try? p.run();p.waitUntilExit();return
+            }
+            if self.isAppleMusicSource(self.sourceBundle) {
+                let src="const m=Application('Music');if(m.running())m.soundVolume=\(value);"
+                let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/osascript");p.arguments=["-l","JavaScript","-e",src];p.standardOutput=Pipe();p.standardError=Pipe();try? p.run();p.waitUntilExit();return
+            }
+            if b.contains("spotify") {
+                let source="tell application id \"com.spotify.client\" to set sound volume to \(value)"
+                let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/osascript");p.arguments=["-e",source];p.standardOutput=Pipe();p.standardError=Pipe();try? p.run();p.waitUntilExit()
+            }
+        }
+        volumeWorkItem=work
+        if isBrowserSource(sourceBundle) || isAppleMusicSource(sourceBundle) || b.contains("spotify") {
+            volumeAvailable=true
+            DispatchQueue.global(qos:.userInitiated).asyncAfter(deadline:.now()+0.02,execute:work)
+        } else { volumeAvailable=false }
+    }
+
+
 }
 
 func calcMarquee(time: Double, overflow: CGFloat) -> (shift: CGFloat, alpha: Double) {
-    let speed: Double = 26.0
+    let speed: Double = 24.0
     let scrollDur = Double(overflow) / speed
     let startHold = 2.4
-    let endHold = 1.8
-    let rewindDur = 0.35
+    let endHold = 1.6
+    let rewindDur = 0.32
     let total = startHold + scrollDur + endHold + rewindDur
     let phase = time.truncatingRemainder(dividingBy: total)
     
@@ -374,7 +732,7 @@ func calcMarquee(time: Double, overflow: CGFloat) -> (shift: CGFloat, alpha: Dou
     } else {
         let r = (phase - (startHold + scrollDur + endHold)) / rewindDur
         let retEase = 1.0 - (0.5 - 0.5 * cos(r * .pi))
-        let ghost = 0.35 + 0.65 * (r < 0.5 ? (1.0 - r * 2.0) : ((r - 0.5) * 2.0))
+        let ghost = 0.4 + 0.6 * (r < 0.5 ? (1.0 - r * 2.0) : ((r - 0.5) * 2.0))
         return (overflow * CGFloat(retEase), ghost)
     }
 }
@@ -461,8 +819,7 @@ struct DynamicScrubber: View {
                     .onEnded { val in
                         let pct = Double(max(0, min(val.location.x / w, 1.0)))
                         state.seek(to: pct * state.trackDur)
-                        state.lastSyncDate = Date()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                             state.isSeeking = false
                         }
                     }
@@ -500,10 +857,11 @@ struct DynamicVolumeSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { val in
+                        guard state.volumeAvailable else { return }
                         state.isChangingVol = true
                         let pct = Double(max(0, min(val.location.x / 58.0, 1.0)))
                         state.appVolume = pct * 100.0
-                        state.setVolume(to: state.appVolume)
+                        state.adjustVolume(to: state.appVolume)
                     }
                     .onEnded { _ in
                         state.isChangingVol = false
@@ -515,6 +873,8 @@ struct DynamicVolumeSlider: View {
                 .foregroundColor(state.accentColor.opacity(0.85))
         }
         .frame(height: 14)
+        .opacity(state.volumeAvailable ? 1.0 : 0.35)
+        .help(state.volumeAvailable ? "App volume" : "This player does not expose in-app volume control")
     }
 }
 
@@ -545,12 +905,8 @@ struct SettingsGlassSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { val in
-                        state.isChangingOpacity = true
                         let pct = Double(max(0, min(val.location.x / w, 1.0)))
                         state.bgOpacity = 0.2 + (pct * 0.8)
-                    }
-                    .onEnded { _ in
-                        state.isChangingOpacity = false
                     }
             )
         }
@@ -617,8 +973,12 @@ struct IslandRootView: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: 18, height: 18)
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .id(state.lastArtKey)
-                        .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+                        .id(state.lastIdentifier)
+                        .transition(.opacity.animation(.easeInOut(duration: 0.18)))
+                } else {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(state.accentColor.opacity(0.85))
                 }
             }
             .frame(width: 18, height: 18)
@@ -633,18 +993,11 @@ struct IslandRootView: View {
             .id(state.trackTitle + state.trackArtist)
             .transition(.opacity.animation(.easeInOut(duration: 0.18)))
             
-            Group {
-                if state.selectedProvider == "Spotify" {
-                    SpotifyBrandLogo(size: 14)
-                } else {
-                    Image(systemName: "applelogo")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(state.accentColor.opacity(0.85))
-                }
-            }
-            .frame(width: 18, height: 18)
-        }
-        .padding(.horizontal, 10)
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(state.accentColor.opacity(0.85))
+                .frame(width: 18, height: 18)
+        }        .padding(.horizontal, 10)
     }
     
     var expandedView: some View {
@@ -672,8 +1025,12 @@ struct IslandRootView: View {
                                 .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
                         )
                         .shadow(color: Color.black.opacity(0.4), radius: 8, y: 4)
-                        .id(state.lastArtKey)
-                        .transition(.opacity.animation(.easeInOut(duration: 0.32)))
+                        .id(state.lastIdentifier)
+                        .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                } else {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundColor(state.accentColor.opacity(0.8))
                 }
             }
             .frame(width: 92, height: 92)
@@ -689,7 +1046,7 @@ struct IslandRootView: View {
                             width: 140
                         )
                         GhostMarqueeText(
-                            text: state.trackArtist,
+                            text: state.trackArtist + (state.appSource == "System" ? "" : "  •  " + state.appSource),
                             font: .system(size: 11, weight: .medium, design: .rounded),
                             nsFont: medFont,
                             color: Color.gray.opacity(0.85),
@@ -720,13 +1077,13 @@ struct IslandRootView: View {
                 
                 HStack(spacing: 42) {
                     Spacer()
-                    Button(action: { state.mediaCmd("previous track") }) {
+                    Button(action: { state.mediaPrev() }) {
                         Image(systemName: "backward.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(state.accentColor.opacity(0.9))
                     }.buttonStyle(.plain)
                     
-                    Button(action: { state.mediaCmd("playpause") }) {
+                    Button(action: { state.mediaPlayPause() }) {
                         ZStack {
                             Circle()
                                 .fill(state.accentColor.opacity(0.16))
@@ -737,7 +1094,7 @@ struct IslandRootView: View {
                         }
                     }.buttonStyle(.plain)
                     
-                    Button(action: { state.mediaCmd("next track") }) {
+                    Button(action: { state.mediaNext() }) {
                         Image(systemName: "forward.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(state.accentColor.opacity(0.9))
@@ -761,28 +1118,36 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
-                Text("Settings")
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(state.accentColor)
+                Text("DynamicNotch")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundColor(state.accentColor)
                 Spacer()
-                Circle()
-                    .fill(state.accentColor.opacity(0.2))
-                    .frame(width: 18, height: 18)
-                    .overlay(
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(state.accentColor)
-                    )
+                Text("Zot says hi")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundColor(state.accentColor.opacity(0.6))
             }
             
             VStack(alignment: .leading, spacing: 6) {
-                Text("Music Provider")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundColor(Color.gray.opacity(0.85))
-                
-                HStack(spacing: 8) {
-                    providerButton("Apple Music", "Music", isSpotify: false)
-                    providerButton("Spotify", "Spotify", isSpotify: true)
+                HStack {
+                    Text("Launch at Login")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.gray.opacity(0.85))
+                    Spacer()
+                    Button(action: { state.toggleLogin() }) {
+                        ZStack(alignment: state.launchAtLogin ? .trailing : .leading) {
+                            Capsule()
+                                .fill(state.launchAtLogin ? state.accentColor : Color.white.opacity(0.12))
+                                .frame(width: 28, height: 16)
+                            Circle()
+                                .fill(state.launchAtLogin ? Color.black : Color.white)
+                                .frame(width: 12, height: 12)
+                                .padding(2)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             
@@ -854,36 +1219,6 @@ struct SettingsView: View {
         )
     }
     
-    func providerButton(_ label: String, _ prov: String, isSpotify: Bool) -> some View {
-        let isSel = state.selectedProvider == prov
-        return Button(action: {
-            state.selectedProvider = prov
-            UserDefaults.standard.set(prov, forKey: "dyn_provider")
-            state.syncPlayer()
-        }) {
-            HStack(spacing: 6) {
-                if isSpotify {
-                    SpotifyBrandLogo(size: 12)
-                } else {
-                    Image(systemName: "applelogo")
-                        .font(.system(size: 9.5, weight: .bold))
-                }
-                Text(label)
-                    .font(.system(size: 9.5, weight: isSel ? .bold : .medium, design: .rounded))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(isSel ? state.accentColor.opacity(0.2) : Color.white.opacity(0.05))
-            .foregroundColor(isSel ? state.accentColor : Color.gray)
-            .cornerRadius(7)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(isSel ? state.accentColor.opacity(0.4) : Color.white.opacity(0.06), lineWidth: 0.8)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-    
     func chip(_ name: String, _ c: Color) -> some View {
         let isSel = state.accentName == name
         return Circle()
@@ -903,20 +1238,26 @@ final class FloatingPanel: NSPanel {
         super.init(contentRect: contentRect, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
         self.isFloatingPanel = true
         self.level = .statusBar
-        self.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        self.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         self.backgroundColor = .clear
         self.isOpaque = false
         self.hasShadow = false
+        self.hidesOnDeactivate = false
+        self.isReleasedWhenClosed = false
     }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var shared: AppDelegate?
     var panel: FloatingPanel!
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     var state = IslandState()
     
     func applicationDidFinishLaunching(_ a: Notification) {
+        AppDelegate.shared = self
         positionPanel()
         
         NotificationCenter.default.addObserver(
@@ -929,13 +1270,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
-            btn.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "Notch Settings")
+            btn.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "DynamicNotch Settings")
             btn.action = #selector(togglePopover)
             btn.target = self
         }
         
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 240, height: 260)
+        popover.contentSize = NSSize(width: 240, height: 215)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: SettingsView(state: state))
     }
