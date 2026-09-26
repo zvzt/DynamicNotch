@@ -2,6 +2,7 @@
 set -euo pipefail
 
 DMG_URL="https://zxt.lol/dynamicnotch/DynamicNotch.dmg"
+DMG_FALLBACK_URL="https://github.com/zvzt/DynamicNotch/releases/latest/download/DynamicNotch.dmg"
 APP_DIR="/Applications/DynamicNotch.app"
 TMP="$(mktemp -d)"
 MOUNT="$TMP/mount"
@@ -28,7 +29,10 @@ for cmd in curl hdiutil; do
 done
 
 echo "Downloading DynamicNotch..."
-curl -fL --retry 3 "$DMG_URL" -o "$DMG"
+if ! curl -fL --retry 2 "$DMG_URL" -o "$DMG"; then
+    echo "zxt.lol download failed, using GitHub release fallback..."
+    curl -fL --retry 3 "$DMG_FALLBACK_URL" -o "$DMG"
+fi
 mkdir -p "$MOUNT"
 hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$MOUNT"
 
