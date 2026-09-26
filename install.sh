@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_URL="https://zxt.lol/dynamicnotch"
 RAW_BASE_URL="https://raw.githubusercontent.com/zvzt/DynamicNotch/main"
-LOGO_URL="https://i.postimg.cc/jjjWppSR/image.png"
+LOGO_URL="https://i.postimg.cc/gcqPFnXy/image.png"
 APP_DIR="/Applications/DynamicNotch.app"
 TMP="$(mktemp -d)"
 BUILD_APP="$TMP/DynamicNotch.app"
