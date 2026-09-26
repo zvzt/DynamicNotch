@@ -295,9 +295,18 @@ final class IslandState: ObservableObject {
         guard !isQuerying else { return }
         isQuerying = true
         if let firefox=readFirefoxMedia() {
-            isQuerying=false
-            missCount=0
-            applyMedia(firefox)
+            queryAppleMusic { [weak self] music in
+                guard let self = self else { return }
+                if let music = music, (music["playing"] as? Bool) == true {
+                    self.isQuerying = false
+                    self.missCount = 0
+                    self.applyMedia(music)
+                } else {
+                    self.isQuerying = false
+                    self.missCount = 0
+                    self.applyMedia(firefox)
+                }
+            }
             return
         }
         MediaControlEngine.shared.get(includeArtwork: false) { [weak self] dict in
@@ -997,11 +1006,6 @@ struct IslandRootView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: islandRadius, style: .continuous))
             .compositingGroup()
-            .shadow(
-                color: Color.black.opacity(state.isExpanded ? 0.65 : 0.25),
-                radius: state.isExpanded ? 18 : 6,
-                y: 3
-            )
             .animation(.spring(response: 0.32, dampingFraction: 0.76), value: state.isExpanded)
             .onHover { hover in
                 state.isExpanded = hover
@@ -1355,7 +1359,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if panel == nil {
             panel = FloatingPanel(contentRect: NSRect(x: x, y: y, width: winW, height: winH))
             state.panel = panel
-            panel.contentView = NSHostingView(rootView: IslandRootView(state: state))
+            let host = NSHostingView(rootView: IslandRootView(state: state))
+            host.wantsLayer = true
+            host.layer?.backgroundColor = NSColor.clear.cgColor
+            host.layer?.isOpaque = false
+            panel.contentView = host
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = false
             panel.orderFrontRegardless()
         } else {
             panel.setFrame(NSRect(x: x, y: y, width: winW, height: winH), display: true)
