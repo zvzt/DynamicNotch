@@ -1,20 +1,31 @@
 #!/bin/bash
 set -euo pipefail
 
+APP="/Applications/DynamicNotch.app"
+TARGET_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+TARGET_HOME="$(dscl . -read "/Users/$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+if [ -z "$TARGET_HOME" ]; then
+    TARGET_HOME="$HOME"
+fi
+SUPPORT="$TARGET_HOME/Library/Application Support/DynamicNotch"
+
 pkill -x DynamicNotch >/dev/null 2>&1 || true
 
-if [ -d /Applications/DynamicNotch.app ]; then
-    if [ -w /Applications ]; then
-        rm -rf /Applications/DynamicNotch.app
+if [ -d "$APP" ]; then
+    if [ "$(id -u)" -eq 0 ] || [ -w /Applications ]; then
+        rm -rf "$APP"
     else
-        sudo rm -rf /Applications/DynamicNotch.app
+        sudo rm -rf "$APP"
     fi
 fi
 
-rm -rf "$HOME/Applications/DynamicNotch.app"
-rm -rf "$HOME/Library/Application Support/DynamicNotch"
-rm -f "$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/lol.zxt.dynamicnotch.json"
-rm -f /tmp/dynamicnotch_firefox_state.json /tmp/dynamicnotch_firefox_cmd.json
-defaults delete lol.zxt.dynamicnotch >/dev/null 2>&1 || true
+rm -rf "$SUPPORT"
+rm -f /tmp/dynamicnotch_firefox_state.json /tmp/dynamicnotch_firefox_command.json /tmp/dynamicnotch_music_artwork
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    sudo -u "$SUDO_USER" defaults delete lol.zxt.dynamicnotch >/dev/null 2>&1 || true
+else
+    defaults delete lol.zxt.dynamicnotch >/dev/null 2>&1 || true
+fi
 
 echo "DynamicNotch removed."
+echo "Homebrew and media-control were left untouched because they may be used by other apps."
