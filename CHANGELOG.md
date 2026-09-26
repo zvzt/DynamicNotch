@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.1
+
+- Removed faint corner/triangle artifacts around the notch
+- Switched the island from rectangular clipping to a true continuous rounded mask
+- Applied the shadow after masking so pixels outside the rounded island remain fully transparent
+
 ## 3.6.0
 
 - Switched the public distribution to the recommended one-line curl installer
