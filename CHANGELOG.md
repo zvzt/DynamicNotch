@@ -1,20 +1,24 @@
 # Changelog
 
+## 3.6.0
+
+- Switched the public distribution to the recommended one-line curl installer
+- Removed DMG and downloadable `.command` installation from the current distribution
+- Added the ZXT project image as both the app icon and menu-bar icon
+- Added automatic `~/Library/Application Support/DynamicNotch` creation on launch
+- DynamicNotch now keeps bundled runtime support files in its own Application Support directory
+- Added a sudo repair / backup installation path
+- Updated uninstall cleanup for the new Application Support directory
+- Added recommended Mac setup and lightweight-native-app notes to the README
+
 ## 3.5.0
 
-- Updated DynamicNotch to the current system-wide Now Playing backend
-- Added direct Apple Music metadata and playback control handling
-- Added Apple Music in-app volume control
-- Added Apple Music artwork retrieval and fallback handling
-- Added Spotify playback and in-app volume controls
-- Added browser Now Playing support
-- Browser volume now controls macOS output volume
-- Added optional Firefox/YouTube metadata and artwork bridge
-- Added launch-at-login support
-- Added packaged DMG distribution
-- Added downloadable `.command` installer
-- Added automated GitHub release builds
-- Added zxt.lol download endpoints
+- Current native notch-style Now Playing build
+- Apple Music direct metadata, playback, seek, volume, and artwork handling
+- Spotify support
+- Browser/system Now Playing integration
+- Launch at Login
+- Updated notch UI, progress controls, and settings
 
 ## 1.0.0
 
