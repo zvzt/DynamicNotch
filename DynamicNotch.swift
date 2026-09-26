@@ -45,14 +45,59 @@ struct SpotifyBrandLogo: View {
     }
 }
 
+
+enum DynamicNotchStorage {
+    static let fm = FileManager.default
+
+    static var rootURL: URL {
+        fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DynamicNotch", isDirectory: true)
+    }
+
+    static func prepare() {
+        let root = rootURL
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        guard let resources = Bundle.main.resourceURL else { return }
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "unknown"
+        let marker = root.appendingPathComponent(".bundle-version")
+        let installedVersion = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard installedVersion != version else { return }
+
+        let managedItems = ["AppIcon.png", "FirefoxExtension", "firefox_host.pl", "media-control"]
+        for name in managedItems {
+            let source = resources.appendingPathComponent(name)
+            let destination = root.appendingPathComponent(name)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            if fm.fileExists(atPath: destination.path) {
+                try? fm.removeItem(at: destination)
+            }
+            try? fm.copyItem(at: source, to: destination)
+        }
+
+        try? version.write(to: marker, atomically: true, encoding: .utf8)
+    }
+
+    static func logoImage() -> NSImage? {
+        let supportLogo = rootURL.appendingPathComponent("AppIcon.png")
+        if let image = NSImage(contentsOf: supportLogo) { return image }
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("AppIcon.png"),
+           let image = NSImage(contentsOf: bundled) { return image }
+        return nil
+    }
+}
+
 final class MediaControlEngine {
     static let shared = MediaControlEngine()
     let toolPath: String
     private let queue = DispatchQueue(label: "lol.zxt.dynamicnotch.media", qos: .userInitiated)
 
     init() {
+        DynamicNotchStorage.prepare()
+        let support = DynamicNotchStorage.rootURL.appendingPathComponent("media-control/bin/media-control").path
         let bundled = Bundle.main.resourceURL?.appendingPathComponent("media-control/bin/media-control").path
-        let candidates = [bundled, "/opt/homebrew/bin/media-control", "/usr/local/bin/media-control"].compactMap { $0 }
+        let candidates = [support, bundled, "/opt/homebrew/bin/media-control", "/usr/local/bin/media-control"].compactMap { $0 }
         toolPath = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/opt/homebrew/bin/media-control"
     }
 
@@ -144,6 +189,7 @@ final class IslandState: ObservableObject {
     private var remoteArtworkURL = ""
 
     init() {
+        DynamicNotchStorage.prepare()
         checkLoginStatus()
         setupListeners()
     }
@@ -1258,6 +1304,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ a: Notification) {
         AppDelegate.shared = self
+        DynamicNotchStorage.prepare()
+        if let appIcon = DynamicNotchStorage.logoImage() {
+            NSApplication.shared.applicationIconImage = appIcon
+        }
         positionPanel()
         
         NotificationCenter.default.addObserver(
@@ -1270,7 +1320,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
-            btn.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "DynamicNotch Settings")
+            if let source = DynamicNotchStorage.logoImage(),
+               let menuIcon = source.copy() as? NSImage {
+                menuIcon.size = NSSize(width: 18, height: 18)
+                menuIcon.isTemplate = false
+                btn.image = menuIcon
+            } else {
+                btn.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "DynamicNotch Settings")
+            }
+            btn.imagePosition = .imageOnly
             btn.action = #selector(togglePopover)
             btn.target = self
         }
