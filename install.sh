@@ -1,13 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-BASE_URL="https://zxt.lol/dynamicnotch"
-APP_DIR="$HOME/Applications/DynamicNotch.app"
-CONTENTS="$APP_DIR/Contents"
-MACOS="$CONTENTS/MacOS"
+DMG_URL="https://zxt.lol/dynamicnotch/DynamicNotch.dmg"
+APP_DIR="/Applications/DynamicNotch.app"
 TMP="$(mktemp -d)"
+MOUNT="$TMP/mount"
+DMG="$TMP/DynamicNotch.dmg"
 
 cleanup() {
+    hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || true
     rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -19,45 +20,46 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
-if ! command -v curl >/dev/null 2>&1; then
-    echo "curl is required."
-    exit 1
-fi
-
-if ! command -v swiftc >/dev/null 2>&1; then
-    echo "Apple's Swift compiler is required."
-    echo "Install Xcode Command Line Tools with:"
-    echo "  xcode-select --install"
-    exit 1
-fi
-
-mkdir -p "$HOME/Applications"
+for cmd in curl hdiutil; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "$cmd is required."
+        exit 1
+    fi
+done
 
 echo "Downloading DynamicNotch..."
-curl -fsSL "$BASE_URL/DynamicNotch.swift" -o "$TMP/DynamicNotch.swift"
-curl -fsSL "$BASE_URL/Info.plist" -o "$TMP/Info.plist"
+curl -fL --retry 3 "$DMG_URL" -o "$DMG"
+mkdir -p "$MOUNT"
+hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$MOUNT"
 
-echo "Compiling..."
-swiftc -O -framework Cocoa -framework SwiftUI     -o "$TMP/DynamicNotch" "$TMP/DynamicNotch.swift"
+if [ ! -d "$MOUNT/DynamicNotch.app" ]; then
+    echo "The downloaded DMG does not contain DynamicNotch.app."
+    exit 1
+fi
 
 pkill -x DynamicNotch >/dev/null 2>&1 || true
 
-rm -rf "$APP_DIR"
-mkdir -p "$MACOS"
-cp "$TMP/DynamicNotch" "$MACOS/DynamicNotch"
-cp "$TMP/Info.plist" "$CONTENTS/Info.plist"
-chmod 755 "$MACOS/DynamicNotch"
+install_app() {
+    rm -rf "$APP_DIR"
+    ditto "$MOUNT/DynamicNotch.app" "$APP_DIR"
+}
 
-if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+if [ -w /Applications ]; then
+    install_app
+else
+    echo "Administrator permission is required to install to /Applications."
+    sudo bash -c 'rm -rf /Applications/DynamicNotch.app'
+    sudo ditto "$MOUNT/DynamicNotch.app" "$APP_DIR"
 fi
 
-echo "Installed to:"
-echo "  $APP_DIR"
-echo
-echo "Launching DynamicNotch..."
+if [ -x "$APP_DIR/Contents/Resources/Install-Firefox-Bridge.command" ]; then
+    bash "$APP_DIR/Contents/Resources/Install-Firefox-Bridge.command" --quiet || true
+fi
+
 open "$APP_DIR"
 
 echo
-echo "DynamicNotch installed."
-echo "Created by ZXT."
+echo "DynamicNotch installed to $APP_DIR"
+echo "Website: https://zxt.lol"
+echo "Discord: 1531412914005606513"
+echo "Email: contact@zxt.lol"
