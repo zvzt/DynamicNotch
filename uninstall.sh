@@ -1,14 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DIR="$HOME/Applications/DynamicNotch.app"
-
-printf '\nDynamicNotch Uninstaller\n========================\n\n'
-
 pkill -x DynamicNotch >/dev/null 2>&1 || true
-rm -rf "$APP_DIR"
 
+if [ -d /Applications/DynamicNotch.app ]; then
+    if [ -w /Applications ]; then
+        rm -rf /Applications/DynamicNotch.app
+    else
+        sudo rm -rf /Applications/DynamicNotch.app
+    fi
+fi
+
+rm -rf "$HOME/Applications/DynamicNotch.app"
+rm -rf "$HOME/Library/Application Support/DynamicNotch"
+rm -f "$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/lol.zxt.dynamicnotch.json"
+rm -f /tmp/dynamicnotch_firefox_state.json /tmp/dynamicnotch_firefox_cmd.json
 defaults delete lol.zxt.dynamicnotch >/dev/null 2>&1 || true
-rm -f /tmp/dyn_art_*.jpg >/dev/null 2>&1 || true
 
 echo "DynamicNotch removed."
