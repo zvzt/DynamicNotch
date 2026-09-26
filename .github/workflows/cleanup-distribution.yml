@@ -1,0 +1,21 @@
+name: Remove legacy release downloads
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/cleanup-distribution.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove old packaged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete v3.5.0 --repo "${{ github.repository }}" --yes --cleanup-tag || true
