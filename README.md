@@ -1,44 +1,70 @@
 # DynamicNotch
 
-A lightweight macOS notch-style music controller for Apple Music and Spotify.
+A lightweight macOS notch-style media controller created and maintained by **ZXT**.
 
-**Created and maintained by ZXT.**
-
-DynamicNotch adds a compact floating music interface near the top of your Mac display. It can show track information and artwork, expand on hover, control playback, seek through a track, adjust volume, and switch between Apple Music and Spotify.
+DynamicNotch places a compact Now Playing interface at the top of your display. It follows the active media session, expands on hover, shows track information and artwork when available, and provides playback, seek, and volume controls.
 
 ## Features
 
-- Compact notch-style player that expands on hover
-- Apple Music and Spotify support
+- Notch-style floating Now Playing interface
+- Apple Music support with direct playback, seek, volume, and artwork handling
+- Spotify support
+- Browser media support through macOS Now Playing
+- Optional enhanced Firefox bridge for browser metadata and artwork
 - Track title, artist, artwork, playback state, and progress
-- Previous, play/pause, and next controls
+- Previous/back, play/pause, and next/forward controls
 - Seek scrubber
-- App-volume control
-- Configurable glass opacity
-- Multiple accent colors
+- Apple Music and Spotify in-app volume control
+- Browser master-output volume control
+- Configurable glass opacity and accent colors
+- Launch at Login option
 - Menu-bar settings
 - Floating interface across Spaces
-- Artwork fallback through Apple's public iTunes Search API
 
-## Install
+## Downloads
 
-Run this in Terminal:
+### DMG
+
+Download the current DMG:
+
+**https://zxt.lol/dynamicnotch/DynamicNotch.dmg**
+
+Open the DMG and drag `DynamicNotch.app` to Applications. Because public builds are currently ad-hoc signed rather than Apple-notarized, macOS may require **Control-click → Open** on first launch.
+
+### `.command` installer
+
+Download:
+
+**https://zxt.lol/dynamicnotch/DynamicNotch.command**
+
+Then run it from Finder, or from Terminal:
+
+```bash
+chmod +x ~/Downloads/DynamicNotch.command
+bash ~/Downloads/DynamicNotch.command
+```
+
+### One-line Terminal install
 
 ```bash
 bash <(curl -fsSL https://zxt.lol/dynamicnotch/install.sh)
 ```
 
-DynamicNotch compiles locally on your Mac and installs to:
+The installer places DynamicNotch in `/Applications`.
 
-```text
-~/Applications/DynamicNotch.app
-```
+## Firefox bridge
 
-The installer launches DynamicNotch when installation finishes.
+DynamicNotch can use macOS Now Playing without a Firefox extension. An optional local bridge provides more direct Firefox/YouTube metadata and artwork.
+
+The DMG includes `Install-Firefox-Bridge.command`. The Terminal installer also prepares the bridge automatically. To enable it in Firefox:
+
+1. Type `about:debugging#/runtime/this-firefox` directly into the Firefox address bar.
+2. Click **Load Temporary Add-on**.
+3. Select `~/Library/Application Support/DynamicNotch/FirefoxExtension/manifest.json`.
+
+Firefox requires temporary local add-ons to be loaded again after restarting Firefox.
 
 ## Uninstall
-
-Run:
 
 ```bash
 bash <(curl -fsSL https://zxt.lol/dynamicnotch/uninstall.sh)
@@ -46,54 +72,38 @@ bash <(curl -fsSL https://zxt.lol/dynamicnotch/uninstall.sh)
 
 ## Requirements
 
-- macOS
-- Apple's Swift compiler / Xcode Command Line Tools
-- Apple Music and/or Spotify for media-control features
+- macOS 13 or newer
+- Apple Silicon or Intel Mac
+- Automation permission may be requested for Apple Music or Spotify controls
 
-If `swiftc` is missing, install Apple's Command Line Tools:
+The packaged DMG includes the media helper used for system Now Playing integration. Source builds can also use a Homebrew-installed `media-control` helper.
 
-```bash
-xcode-select --install
-```
+## Source
 
-macOS may ask for Automation permission when DynamicNotch controls Apple Music or Spotify.
+The source is public under the MIT License.
 
-## Source code
+Main project files:
 
-The source code is public and may be used, studied, modified, and redistributed under the terms of the MIT License.
+- `DynamicNotch.swift` — application source
+- `Info.plist` — app metadata
+- `DynamicNotch.command` — downloadable installer
+- `install.sh` / `uninstall.sh` — zxt.lol install endpoints
+- `firefox/` — optional Firefox bridge
+- `.github/workflows/release.yml` — macOS DMG/release build
 
-If you reuse code from DynamicNotch, keep the copyright/license notice included with the project.
+## Support / issues
 
-Main files:
-
-- `DynamicNotch.swift` — main application source
-- `Info.plist` — app bundle metadata
-- `install.sh` — installer
-- `uninstall.sh` — uninstaller
-- `LICENSE` — MIT License
-- `CONTRIBUTING.md` — information for participating in the official project
-- `SECURITY.md` — security-reporting information
-
-Official downloads and installers are served through **zxt.lol**.
-
-## Contributing / joining the project
-
-If you want to actively participate in the official DynamicNotch project, contribute features, help maintain it, or work directly with ZXT, contact me first.
+For bugs, installation issues, or project questions:
 
 - Discord user ID: `1531412914005606513`
 - Email: `contact@zxt.lol`
+- Website: `https://zxt.lol`
 
-Bug reports, ideas, and suggestions are welcome.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
+GitHub issues are also welcome for non-sensitive bug reports.
 
 ## Credits
 
 Created by **ZXT**.
-
-- Website: `zxt.lol`
-- Discord: `1531412914005606513`
-- Email: `contact@zxt.lol`
 
 ## License
 
