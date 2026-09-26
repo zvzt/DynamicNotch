@@ -61,12 +61,23 @@ cp "$TMP/Info.plist" "$CONTENTS/Info.plist"
 cp "$TMP/AppIcon.png" "$RESOURCES/AppIcon.png"
 
 echo "Building native Swift app..."
-swiftc -O \
-    -framework Cocoa \
-    -framework SwiftUI \
-    -framework ServiceManagement \
-    -o "$MACOS/DynamicNotch" \
-    "$TMP/DynamicNotch.swift"
+echo "First build can take around 10-45 seconds while Swift loads system frameworks."
+
+run_compile() {
+    swiftc -Onone \
+        -framework Cocoa \
+        -framework SwiftUI \
+        -framework ServiceManagement \
+        -o "$MACOS/DynamicNotch" \
+        "$TMP/DynamicNotch.swift"
+}
+
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    chown -R "$SUDO_USER":staff "$TMP"
+    sudo -H -u "$SUDO_USER" /bin/bash -c "$(printf '%q ' "$(command -v swiftc)" -Onone -framework Cocoa -framework SwiftUI -framework ServiceManagement -o "$MACOS/DynamicNotch" "$TMP/DynamicNotch.swift")"
+else
+    run_compile
+fi
 chmod 755 "$MACOS/DynamicNotch"
 
 echo "Creating macOS app icon..."
