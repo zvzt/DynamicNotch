@@ -187,6 +187,8 @@ final class IslandState: ObservableObject {
     private var volumeWorkItem: DispatchWorkItem?
     private var currentAlbum = ""
     private var remoteArtworkURL = ""
+    private var appleMusicWasPlaying = false
+    private var appleMusicTakeoverUntil = Date.distantPast
 
     init() {
         DynamicNotchStorage.prepare()
@@ -294,10 +296,25 @@ final class IslandState: ObservableObject {
     func queryMedia() {
         guard !isQuerying else { return }
         isQuerying = true
-        if let firefox=readFirefoxMedia() {
-            queryAppleMusic { [weak self] music in
-                guard let self = self else { return }
-                if let music = music, (music["playing"] as? Bool) == true {
+
+        queryAppleMusic { [weak self] music in
+            guard let self = self else { return }
+
+            let musicPlaying = (music?["playing"] as? Bool) == true
+            if musicPlaying && !self.appleMusicWasPlaying {
+                self.appleMusicTakeoverUntil = Date().addingTimeInterval(2.5)
+            }
+            self.appleMusicWasPlaying = musicPlaying
+
+            if musicPlaying && Date() < self.appleMusicTakeoverUntil, let music = music {
+                self.isQuerying = false
+                self.missCount = 0
+                self.applyMedia(music)
+                return
+            }
+
+            if let firefox = self.readFirefoxMedia() {
+                if musicPlaying && self.isAppleMusicSource(self.sourceBundle), let music = music {
                     self.isQuerying = false
                     self.missCount = 0
                     self.applyMedia(music)
@@ -306,36 +323,36 @@ final class IslandState: ObservableObject {
                     self.missCount = 0
                     self.applyMedia(firefox)
                 }
+                return
             }
-            return
-        }
-        MediaControlEngine.shared.get(includeArtwork: false) { [weak self] dict in
-            guard let self = self else { return }
-            let finish: ([String:Any]?) -> Void = { finalDict in
+
+            MediaControlEngine.shared.get(includeArtwork: false) { [weak self] dict in
+                guard let self = self else { return }
                 self.isQuerying = false
-                if let firefox=self.readFirefoxMedia() {
-                    self.missCount=0
-                    self.applyMedia(firefox)
-                    return
-                }
-                guard let finalDict=finalDict, !(finalDict["title"] is NSNull) else {
-                    self.missCount += 1
-                    if self.missCount >= 2 { self.clearMedia() }
-                    return
-                }
-                self.missCount = 0
-                self.applyMedia(finalDict)
-            }
-            if let dict=dict {
-                let bundle=((dict["parentApplicationBundleIdentifier"] as? String)?.isEmpty==false ? dict["parentApplicationBundleIdentifier"] as? String : nil) ?? (dict["bundleIdentifier"] as? String) ?? ""
-                if self.isAppleMusicSource(bundle) {
-                    self.queryAppleMusic { music in
-                        if let firefox=self.readFirefoxMedia(){finish(firefox)}
-                        else{finish(music ?? dict)}
+
+                if let dict = dict, !(dict["title"] is NSNull) {
+                    let bundle = ((dict["parentApplicationBundleIdentifier"] as? String)?.isEmpty == false
+                        ? dict["parentApplicationBundleIdentifier"] as? String
+                        : nil) ?? (dict["bundleIdentifier"] as? String) ?? ""
+
+                    if self.isAppleMusicSource(bundle), let music = music {
+                        self.missCount = 0
+                        self.applyMedia(music)
+                    } else {
+                        self.missCount = 0
+                        self.applyMedia(dict)
                     }
-                } else { finish(dict) }
-            } else {
-                self.queryAppleMusic { music in finish(music) }
+                    return
+                }
+
+                if let music = music {
+                    self.missCount = 0
+                    self.applyMedia(music)
+                    return
+                }
+
+                self.missCount += 1
+                if self.missCount >= 2 { self.clearMedia() }
             }
         }
     }
@@ -370,14 +387,14 @@ final class IslandState: ObservableObject {
                 appVolume=max(0,min(v,100))
                 volumeAvailable = isAppleMusicSource(bundle) || bundle.lowercased().contains("spotify")
             } else { readAppVolume() }
-            if isMusicSource(bundle) || bundle.lowercased().contains("firefox") {
+            if isMusicSource(bundle) || isBrowserSource(bundle) {
                 withAnimation(.easeInOut(duration: 0.12)) { artwork = nil }
             } else { setFallbackArtwork(bundle: bundle) }
         }
         if changed {
             lastIdentifier = identifier
             artworkIsReal = false
-            if isMusicSource(bundle) || bundle.lowercased().contains("firefox") {
+            if isMusicSource(bundle) || isBrowserSource(bundle) {
                 withAnimation(.easeInOut(duration: 0.12)) { artwork = nil }
             } else { setFallbackArtwork(bundle: bundle) }
             fetchArtwork(attempt: 0)
@@ -388,32 +405,57 @@ final class IslandState: ObservableObject {
 
     func fetchArtwork(attempt: Int = 0) {
         lastArtworkAttempt = Date()
-        let b=sourceBundle.lowercased()
-        if b.contains("firefox"), !remoteArtworkURL.isEmpty {
-            fetchRemoteArtwork(remoteArtworkURL, expected:lastIdentifier) {
-                if self.artwork == nil { self.setFallbackArtwork(bundle:self.sourceBundle) }
+        let expected = lastIdentifier
+        let b = sourceBundle.lowercased()
+
+        if isAppleMusicSource(sourceBundle) {
+            fetchAppleMusicArtwork(attempt: attempt)
+            return
+        }
+
+        if isBrowserSource(sourceBundle),
+           b.contains("firefox"),
+           !remoteArtworkURL.isEmpty {
+            fetchRemoteArtwork(remoteArtworkURL, expected: expected) { [weak self] in
+                self?.fetchSystemArtwork(expected: expected, attempt: attempt)
             }
             return
         }
-        if isAppleMusicSource(sourceBundle) {
-            fetchAppleMusicArtwork(attempt:attempt)
-            return
-        }
-        let expected = lastIdentifier
+
+        fetchSystemArtwork(expected: expected, attempt: attempt)
+    }
+
+    func fetchSystemArtwork(expected: String, attempt: Int = 0) {
         MediaControlEngine.shared.get(includeArtwork: true) { [weak self] dict in
             guard let self = self, self.lastIdentifier == expected else { return }
-            if let dict = dict,
-               let b64 = dict["artworkData"] as? String,
-               let data = Data(base64Encoded: b64),
-               let img = NSImage(data: data) {
-                self.artworkIsReal = true
-                withAnimation(.easeInOut(duration: 0.22)) { self.artwork = img }
-                return
+
+            if let dict = dict {
+                let bundle = ((dict["parentApplicationBundleIdentifier"] as? String)?.isEmpty == false
+                    ? dict["parentApplicationBundleIdentifier"] as? String
+                    : nil) ?? (dict["bundleIdentifier"] as? String) ?? ""
+                let title = (dict["title"] as? String) ?? ""
+
+                let sameSource = bundle.isEmpty
+                    || bundle.caseInsensitiveCompare(self.sourceBundle) == .orderedSame
+                    || (self.isBrowserSource(bundle) && self.isBrowserSource(self.sourceBundle))
+                let sameTitle = title.isEmpty
+                    || title.caseInsensitiveCompare(self.trackTitle) == .orderedSame
+
+                if sameSource && sameTitle,
+                   let b64 = dict["artworkData"] as? String,
+                   let data = Data(base64Encoded: b64),
+                   let img = NSImage(data: data) {
+                    self.artworkIsReal = true
+                    withAnimation(.easeInOut(duration: 0.22)) { self.artwork = img }
+                    return
+                }
             }
-            if attempt < 5 {
-                let delay = 0.35 + (Double(attempt) * 0.45)
+
+            if attempt < 7 {
+                let delay = 0.30 + (Double(attempt) * 0.35)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    if self.lastIdentifier == expected && !self.artworkIsReal { self.fetchArtwork(attempt: attempt + 1) }
+                    guard self.lastIdentifier == expected, !self.artworkIsReal else { return }
+                    self.fetchSystemArtwork(expected: expected, attempt: attempt + 1)
                 }
             } else if self.artwork == nil {
                 self.setFallbackArtwork(bundle: self.sourceBundle)
@@ -562,7 +604,14 @@ final class IslandState: ObservableObject {
         }
         let b = bundle.lowercased()
         if b.contains("firefox") { return "Firefox" }
-        if b.contains("chrome") { return "Chrome" }
+        if b.contains("brave") { return "Brave" }
+        if b.contains("edge") { return "Microsoft Edge" }
+        if b.contains("vivaldi") { return "Vivaldi" }
+        if b.contains("opera") { return "Opera" }
+        if b.contains("arc") { return "Arc" }
+        if b.contains("orion") { return "Orion" }
+        if b.contains("duckduckgo") { return "DuckDuckGo" }
+        if b.contains("chrome") || b.contains("chromium") { return "Chrome" }
         if b.contains("safari") { return "Safari" }
         if b.contains("spotify") { return "Spotify" }
         if b.contains("music") { return "Music" }
@@ -600,7 +649,17 @@ final class IslandState: ObservableObject {
 
     func isBrowserSource(_ bundle: String) -> Bool {
         let b = bundle.lowercased()
-        return b.contains("firefox") || b.contains("chrome") || b.contains("safari")
+        return b.contains("firefox")
+            || b.contains("chrome")
+            || b.contains("chromium")
+            || b.contains("safari")
+            || b.contains("brave")
+            || b.contains("edge")
+            || b.contains("vivaldi")
+            || b.contains("opera")
+            || b.contains("arc")
+            || b.contains("orion")
+            || b.contains("duckduckgo")
     }
 
     func mediaPlayPause() {
@@ -978,17 +1037,6 @@ struct IslandRootView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: islandRadius, style: .continuous)
                     .fill(Color.black.opacity(state.bgOpacity))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: islandRadius, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [state.accentColor.opacity(0.25), Color.white.opacity(0.04)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                ),
-                                lineWidth: 0.8
-                            )
-                    )
                 
                 if state.isExpanded {
                     expandedView
@@ -1004,8 +1052,7 @@ struct IslandRootView: View {
                 width: state.isExpanded ? state.expandedW : state.compactW,
                 height: state.isExpanded ? state.expandedH : state.compactH
             )
-            .clipShape(RoundedRectangle(cornerRadius: islandRadius, style: .continuous))
-            .compositingGroup()
+            .clipShape(RoundedRectangle(cornerRadius: islandRadius, style: .continuous), style: FillStyle(antialiased: true))
             .animation(.spring(response: 0.32, dampingFraction: 0.76), value: state.isExpanded)
             .onHover { hover in
                 state.isExpanded = hover
