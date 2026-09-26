@@ -33,15 +33,25 @@ This downloads the current source from **zxt.lol**, builds DynamicNotch natively
 
 There is no separate DMG or `.command` download in the current distribution.
 
-### Backup / repair install
+### Alternative #1 — Raw GitHub installer
 
-If the normal installer cannot replace an existing copy, use the sudo repair path:
+If the zxt.lol mirror is unavailable or stale, run the installer directly from the public GitHub source:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/zvzt/DynamicNotch/main/install.sh)
+```
+
+This uses the same installer logic but downloads it straight from GitHub instead of zxt.lol.
+
+### Alternative #2 — Sudo repair / backup install
+
+If the normal or raw GitHub installer cannot replace an existing copy, use the repair path:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvzt/DynamicNotch/main/install.sh -o /tmp/dynamicnotch-install.sh && sudo -v && bash /tmp/dynamicnotch-install.sh --repair
 ```
 
-That repair path downloads directly from the GitHub source repository, bypasses the zxt.lol mirror, rebuilds the current version as your normal user, and only uses sudo when macOS requires permission to replace the app in `/Applications`. The first Swift build may sit at the build step for roughly 10-45 seconds while system frameworks load.
+This bypasses the zxt.lol mirror, rebuilds the current version as your normal user, and only uses sudo when macOS requires permission to replace the app in `/Applications`. The first Swift build may sit at the build step for roughly 10-45 seconds while system frameworks load.
 
 ## Recommended Mac setup
 
