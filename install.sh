@@ -92,7 +92,7 @@ done
 
 run_user() {
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-        sudo -u "$SUDO_USER" "$@"
+        sudo -H -u "$SUDO_USER" "$@"
     else
         "$@"
     fi
@@ -130,7 +130,7 @@ else
 fi
 
 if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    sudo -u "$SUDO_USER" open "$APP_DIR" >/dev/null 2>&1 || true
+    sudo -H -u "$SUDO_USER" open "$APP_DIR" >/dev/null 2>&1 || true
 else
     open "$APP_DIR"
 fi
