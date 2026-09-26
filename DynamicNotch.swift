@@ -65,7 +65,7 @@ enum DynamicNotchStorage {
 
         guard installedVersion != version else { return }
 
-        let managedItems = ["AppIcon.png", "FirefoxExtension", "firefox_host.pl", "media-control"]
+        let managedItems = ["AppIcon.png", "media-control"]
         for name in managedItems {
             let source = resources.appendingPathComponent(name)
             let destination = root.appendingPathComponent(name)
