@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BASE_URL="https://zxt.lol/dynamicnotch"
+RAW_BASE_URL="https://raw.githubusercontent.com/zvzt/DynamicNotch/main"
 LOGO_URL="https://i.postimg.cc/jjjWppSR/image.png"
 APP_DIR="/Applications/DynamicNotch.app"
 TMP="$(mktemp -d)"
@@ -13,6 +14,7 @@ REPAIR=false
 
 if [ "${1:-}" = "--repair" ]; then
     REPAIR=true
+    BASE_URL="$RAW_BASE_URL"
 fi
 
 cleanup() {
