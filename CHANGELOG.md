@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.6.3
+
+- Restored video/page artwork as the preferred browser artwork instead of immediately showing the browser app icon
+- Browser artwork now retries the macOS Now Playing artwork before falling back to an app icon
+- Expanded browser recognition to Firefox, Safari, Chrome/Chromium, Brave, Edge, Vivaldi, Opera, Arc, Orion, and DuckDuckGo
+- Browser playback controls continue through macOS Now Playing, with Firefox retaining its optional direct bridge
+- Browser volume control remains the Mac master output volume
+- Added Apple Music start-transition takeover so switching from browser playback to Apple Music is more reliable
+- Removed the outer gradient border and extra compositing pass around the island to eliminate the faint corner outlines
+
 ## 3.6.2
 
 - Removed the outer island shadow that caused faint corner wedges around the rounded UI
