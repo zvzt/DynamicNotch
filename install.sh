@@ -74,7 +74,12 @@ run_compile() {
 
 if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
     chown -R "$SUDO_USER":staff "$TMP"
-    sudo -H -u "$SUDO_USER" /bin/bash -c "$(printf '%q ' "$(command -v swiftc)" -Onone -framework Cocoa -framework SwiftUI -framework ServiceManagement -o "$MACOS/DynamicNotch" "$TMP/DynamicNotch.swift")"
+    sudo -H -u "$SUDO_USER" "$(command -v swiftc)" -Onone \
+        -framework Cocoa \
+        -framework SwiftUI \
+        -framework ServiceManagement \
+        -o "$MACOS/DynamicNotch" \
+        "$TMP/DynamicNotch.swift"
 else
     run_compile
 fi
