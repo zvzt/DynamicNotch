@@ -38,10 +38,10 @@ There is no separate DMG or `.command` download in the current distribution.
 If the normal installer cannot replace an existing copy, use the sudo repair path:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zvzt/DynamicNotch/main/install.sh -o /tmp/dynamicnotch-install.sh && sudo bash /tmp/dynamicnotch-install.sh --repair
+curl -fsSL https://raw.githubusercontent.com/zvzt/DynamicNotch/main/install.sh -o /tmp/dynamicnotch-install.sh && sudo -v && bash /tmp/dynamicnotch-install.sh --repair
 ```
 
-That repair path downloads directly from the GitHub source repository, bypasses the zxt.lol mirror, rebuilds the current version, and replaces the app in `/Applications`.
+That repair path downloads directly from the GitHub source repository, bypasses the zxt.lol mirror, rebuilds the current version as your normal user, and only uses sudo when macOS requires permission to replace the app in `/Applications`. The first Swift build may sit at the build step for roughly 10-45 seconds while system frameworks load.
 
 ## Recommended Mac setup
 
