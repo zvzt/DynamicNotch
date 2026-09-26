@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.2
+
+- Removed the outer island shadow that caused faint corner wedges around the rounded UI
+- Forced the SwiftUI hosting layer and panel backing to remain fully transparent
+- Apple Music now takes priority when it starts playing while Firefox still reports an active YouTube session
+- Paused Apple Music still yields to active Firefox/YouTube media
+
 ## 3.6.1
 
 - Removed faint corner/triangle artifacts around the notch
