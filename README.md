@@ -1,16 +1,16 @@
 # DynamicNotch
 
-A lightweight macOS notch-style media controller created and maintained by **ZXT**.
+A lightweight native macOS notch-style media controller created and maintained by **ZXT**.
 
 DynamicNotch places a compact Now Playing interface at the top of your display. It follows the active media session, expands on hover, shows track information and artwork when available, and provides playback, seek, and volume controls.
 
 ## Features
 
+- Native SwiftUI/Cocoa app — no Electron or embedded browser runtime
 - Notch-style floating Now Playing interface
 - Apple Music support with direct playback, seek, volume, and artwork handling
 - Spotify support
-- Browser media support through macOS Now Playing
-- Optional enhanced Firefox bridge for browser metadata and artwork
+- Browser/system media support through macOS Now Playing
 - Track title, artist, artwork, playback state, and progress
 - Previous/back, play/pause, and next/forward controls
 - Seek scrubber
@@ -18,51 +18,79 @@ DynamicNotch places a compact Now Playing interface at the top of your display. 
 - Browser master-output volume control
 - Configurable glass opacity and accent colors
 - Launch at Login option
-- Menu-bar settings
+- Custom DynamicNotch app and menu-bar icon
 - Floating interface across Spaces
 
-## Downloads
+## Recommended installation
 
-### DMG
-
-Download the current DMG:
-
-**https://zxt.lol/dynamicnotch/DynamicNotch.dmg**
-
-Open the DMG and drag `DynamicNotch.app` to Applications. Because public builds are currently ad-hoc signed rather than Apple-notarized, macOS may require **Control-click → Open** on first launch.
-
-### `.command` installer
-
-Download:
-
-**https://zxt.lol/dynamicnotch/DynamicNotch.command**
-
-Then run it from Finder, or from Terminal:
-
-```bash
-chmod +x ~/Downloads/DynamicNotch.command
-bash ~/Downloads/DynamicNotch.command
-```
-
-### One-line Terminal install
+The recommended and supported installation method is the one-line Terminal installer:
 
 ```bash
 bash <(curl -fsSL https://zxt.lol/dynamicnotch/install.sh)
 ```
 
-The installer places DynamicNotch in `/Applications`.
+This downloads the current source from **zxt.lol**, builds DynamicNotch natively on your Mac, installs it to `/Applications`, signs the local build, and launches it.
 
-## Firefox bridge
+There is no separate DMG or `.command` download in the current distribution.
 
-DynamicNotch can use macOS Now Playing without a Firefox extension. An optional local bridge provides more direct Firefox/YouTube metadata and artwork.
+### Backup / repair install
 
-The DMG includes `Install-Firefox-Bridge.command`. The Terminal installer also prepares the bridge automatically. To enable it in Firefox:
+If the normal installer cannot replace an existing copy, use the sudo repair path:
 
-1. Type `about:debugging#/runtime/this-firefox` directly into the Firefox address bar.
-2. Click **Load Temporary Add-on**.
-3. Select `~/Library/Application Support/DynamicNotch/FirefoxExtension/manifest.json`.
+```bash
+curl -fsSL https://zxt.lol/dynamicnotch/install.sh -o /tmp/dynamicnotch-install.sh && sudo bash /tmp/dynamicnotch-install.sh --repair
+```
 
-Firefox requires temporary local add-ons to be loaded again after restarting Firefox.
+That rebuilds the current version and replaces the app in `/Applications`.
+
+## Recommended Mac setup
+
+**Minimum**
+- macOS 13 Ventura or newer
+- Intel or Apple Silicon Mac
+- Apple Command Line Tools / `swiftc`
+
+Install Command Line Tools if needed:
+
+```bash
+xcode-select --install
+```
+
+**Recommended**
+- Apple Silicon Mac (M1 or newer)
+- macOS 14 Sonoma or newer
+- 8 GB RAM or more
+- Homebrew installed for the most complete browser/system Now Playing support
+
+If Homebrew is already installed, the installer automatically prepares the small `media-control` helper used by DynamicNotch.
+
+DynamicNotch itself is intentionally lightweight. It is a native Swift app rather than an Electron app, does not run its own web server, and does not ship an embedded browser engine. Most of the work is event/media polling and drawing the small notch interface.
+
+## App data
+
+On first launch, DynamicNotch creates its own support directory:
+
+```text
+~/Library/Application Support/DynamicNotch
+```
+
+Bundled support files such as the app icon and media helper are copied there so DynamicNotch keeps its own runtime files together instead of scattering them around your home directory.
+
+The main application remains:
+
+```text
+/Applications/DynamicNotch.app
+```
+
+## App icon
+
+DynamicNotch uses the project icon supplied by ZXT for both:
+- the macOS application icon
+- the menu-bar settings icon
+
+Source image:
+
+`https://i.postimg.cc/jjjWppSR/image.png`
 
 ## Uninstall
 
@@ -70,36 +98,33 @@ Firefox requires temporary local add-ons to be loaded again after restarting Fir
 bash <(curl -fsSL https://zxt.lol/dynamicnotch/uninstall.sh)
 ```
 
-## Requirements
+The uninstaller removes the app, DynamicNotch preferences, temporary state, and `~/Library/Application Support/DynamicNotch`. It does not uninstall Homebrew or `media-control` because those may be used by other software.
 
-- macOS 13 or newer
-- Apple Silicon or Intel Mac
-- Automation permission may be requested for Apple Music or Spotify controls
+## Notes
 
-The packaged DMG includes the media helper used for system Now Playing integration. Source builds can also use a Homebrew-installed `media-control` helper.
+macOS may request Automation permission when DynamicNotch controls Apple Music or Spotify. Allow it if you want those controls to work.
+
+The app is locally/ad-hoc signed by the installer. It is not currently distributed through the Mac App Store or Apple notarization service.
 
 ## Source
 
 The source is public under the MIT License.
 
 Main project files:
-
 - `DynamicNotch.swift` — application source
 - `Info.plist` — app metadata
-- `DynamicNotch.command` — downloadable installer
-- `install.sh` / `uninstall.sh` — zxt.lol install endpoints
-- `firefox/` — optional Firefox bridge
-- `.github/workflows/release.yml` — macOS DMG/release build
+- `install.sh` — recommended curl installer
+- `uninstall.sh` — uninstaller
+- `CHANGELOG.md` — release history
 
 ## Support / issues
 
 For bugs, installation issues, or project questions:
-
 - Discord user ID: `1531412914005606513`
 - Email: `contact@zxt.lol`
 - Website: `https://zxt.lol`
 
-GitHub issues are also welcome for non-sensitive bug reports.
+GitHub issues are welcome for non-sensitive bug reports.
 
 ## Credits
 
