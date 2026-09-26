@@ -965,11 +965,12 @@ struct IslandRootView: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            let islandRadius: CGFloat = state.isExpanded ? 24 : 16
             ZStack {
-                RoundedRectangle(cornerRadius: state.isExpanded ? 24 : 16, style: .continuous)
+                RoundedRectangle(cornerRadius: islandRadius, style: .continuous)
                     .fill(Color.black.opacity(state.bgOpacity))
                     .overlay(
-                        RoundedRectangle(cornerRadius: state.isExpanded ? 24 : 16, style: .continuous)
+                        RoundedRectangle(cornerRadius: islandRadius, style: .continuous)
                             .stroke(
                                 LinearGradient(
                                     colors: [state.accentColor.opacity(0.25), Color.white.opacity(0.04)],
@@ -979,7 +980,6 @@ struct IslandRootView: View {
                                 lineWidth: 0.8
                             )
                     )
-                    .shadow(color: Color.black.opacity(state.isExpanded ? 0.65 : 0.25), radius: state.isExpanded ? 18 : 6, y: 3)
                 
                 if state.isExpanded {
                     expandedView
@@ -995,7 +995,13 @@ struct IslandRootView: View {
                 width: state.isExpanded ? state.expandedW : state.compactW,
                 height: state.isExpanded ? state.expandedH : state.compactH
             )
-            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: islandRadius, style: .continuous))
+            .compositingGroup()
+            .shadow(
+                color: Color.black.opacity(state.isExpanded ? 0.65 : 0.25),
+                radius: state.isExpanded ? 18 : 6,
+                y: 3
+            )
             .animation(.spring(response: 0.32, dampingFraction: 0.76), value: state.isExpanded)
             .onHover { hover in
                 state.isExpanded = hover
