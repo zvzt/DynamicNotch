@@ -50,8 +50,10 @@ jobs:
           chmod +x "$MACOS/DynamicNotch" "$RESOURCES/firefox_host.pl" "$RESOURCES/Install-Firefox-Bridge.command"
 
           HELPER_PREFIX="$(brew --prefix media-control)"
+          HELPER_REAL="$(cd "$HELPER_PREFIX" && pwd -P)"
           mkdir -p "$RESOURCES/media-control"
-          ditto "$HELPER_PREFIX" "$RESOURCES/media-control"
+          ditto "$HELPER_REAL" "$RESOURCES/media-control"
+          test -x "$RESOURCES/media-control/bin/media-control"
 
           codesign --force --deep --sign - "$APP"
 
